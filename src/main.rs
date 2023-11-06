@@ -13,7 +13,7 @@ const WORDLIST: &str = "wordlist/subdomain.txt";
 
 #[tokio::main]
 async fn main() {
-    let mut args: Vec<String> = env::args().collect();
+    let args: Vec<String> = env::args().collect();
 
     if args.len() != 2 {
         println!("usage: ./dns_enum domain.com");
@@ -27,7 +27,7 @@ async fn main() {
     }
 
 
-    let max_threads = 8;
+    let max_threads = 16;
     let url_queue = Arc::new(Mutex::new(VecDeque::from(wordlist)));
 
     for _ in 0..max_threads {
@@ -48,11 +48,6 @@ async fn main() {
         });
         handle.await.expect("Erreur lors de l'exécution du thread");
     }
-
-    loop {
-
-    }
-
 }
 
 async fn fetch_url(url: &str) -> Result<reqwest::Response, reqwest::Error> {
