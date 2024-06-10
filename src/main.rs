@@ -6,8 +6,11 @@ use std::fs::read_to_string;
 use std::io::Write;
 use std::ops::Index;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-use reqwest::blocking::Client;
+use std::time::Instant;
+use trust_dns_resolver::Resolver;
+use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
+use trust_dns_resolver::error::ResolveResult;
+use trust_dns_resolver::lookup::TxtLookup;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let arg = env::args().collect::<Vec<String>>();
@@ -18,32 +21,32 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut t = vec![];
     for x in x.lines() {
         let url = url.clone();
-        t.push(format!("https://{x}.{url}"))
+        t.push(format!("{x}.{url}"))
     }
 
     let total_requests = t.len();
-    let mut pool = thread_pool::ThreadPool::new(4, total_requests);
+    let mut pool = thread_pool::ThreadPool::new(2, total_requests);
     let active_jobs = Arc::clone(&pool.active_jobs);
     let completed_requests = Arc::new(Mutex::new(0));
     let start_time = Instant::now();
 
-    for url in t {
+    for domain in t {
         let active_jobs = Arc::clone(&active_jobs);
         let completed_requests = Arc::clone(&completed_requests);
         pool.execute(move || {
-            match Client::new().get(&url).timeout(Duration::from_secs(1)).send() {
-                Ok(e) => {
-                    if e.status() == 200 {
-                        println!("Found: {url}");
-                    }
-                }
-                Err(_) => {}
-            }
+            let resolver = Resolver::new(
+                ResolverConfig::default(),
+                ResolverOpts::default()
+            ).unwrap();
+
+            display_txt(&*domain.clone(), &resolver.txt_lookup(domain.clone()));
+
             let mut completed_requests = completed_requests.lock().unwrap();
             *completed_requests += 1;
             let mut active_jobs = active_jobs.lock().unwrap();
             *active_jobs -= 1;
         });
+        //sleep(Duration::from_secs(1));
     }
 
     loop {
@@ -64,4 +67,18 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     println!("\nAll tasks are completed.");
     Ok(())
+}
+
+fn display_txt(query: &str, txt_response: &ResolveResult<TxtLookup>) {
+    match txt_response {
+        Err(_) => {  },
+        Ok(txt_response) => {
+            println!("{}", &query);
+            for record in txt_response.iter() {
+                if !record.to_string().starts_with("v=spf1") {
+                    println!("{}", &record.to_string());
+                }
+            }
+        }
+    }
 }
