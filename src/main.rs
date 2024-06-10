@@ -1,31 +1,37 @@
 mod thread_pool;
+mod cmd_line_parser;
 
-use std::env;
-use std::error::Error;
 use std::fs::read_to_string;
 use std::io::Write;
-use std::ops::Index;
+use std::process::exit;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use clap::Parser;
 use trust_dns_resolver::Resolver;
 use trust_dns_resolver::config::{ResolverConfig, ResolverOpts};
-use trust_dns_resolver::error::ResolveResult;
-use trust_dns_resolver::lookup::TxtLookup;
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let arg = env::args().collect::<Vec<String>>();
-    let url = arg.index(1).to_string();
-    let path = arg.index(2).to_string();
+fn main() -> anyhow::Result<()> {
+    let new_args = cmd_line_parser::Args::parse();
+
+    let url = if !new_args.domain.is_empty(){
+        new_args.domain
+    }else { println!("no domain name found"); exit(0); };
+    let path = if !new_args.word_list_path.is_empty(){
+        new_args.word_list_path
+    }else { println!("no wordlist found"); exit(0); };
+    let thread_count = if new_args.thread > 5 || new_args.thread <= 0{
+        5
+    }else { new_args.thread };
 
     let x = read_to_string(path)?;
     let mut t = vec![];
     for x in x.lines() {
-        let url = url.clone();
         t.push(format!("{x}.{url}"))
     }
 
     let total_requests = t.len();
-    let mut pool = thread_pool::ThreadPool::new(2, total_requests);
+
+    let mut pool = thread_pool::ThreadPool::new(thread_count, total_requests);
     let active_jobs = Arc::clone(&pool.active_jobs);
     let completed_requests = Arc::new(Mutex::new(0));
     let start_time = Instant::now();
@@ -39,14 +45,17 @@ fn main() -> Result<(), Box<dyn Error>> {
                 ResolverOpts::default()
             ).unwrap();
 
-            display_txt(&*domain.clone(), &resolver.txt_lookup(domain.clone()));
-
+            match resolver.txt_lookup(domain.clone()) {
+                Err(_) => {},
+                Ok(_) => {
+                    println!("https://{}", &domain);
+                }
+            }
             let mut completed_requests = completed_requests.lock().unwrap();
             *completed_requests += 1;
             let mut active_jobs = active_jobs.lock().unwrap();
             *active_jobs -= 1;
         });
-        //sleep(Duration::from_secs(1));
     }
 
     loop {
@@ -56,8 +65,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         if elapsed > 0.0 {
             let rps = completed as f64 / elapsed;
-            print!("\r{:.2} / s | {completed}/{remaining} ",rps);
-            std::io::stdout().flush().unwrap();
+            print!("\r{rps:.2} / s | {completed}/{total_requests} ");
+            std::io::stdout().flush()?;
         }
 
         if remaining == 0 {
@@ -67,18 +76,4 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     println!("\nAll tasks are completed.");
     Ok(())
-}
-
-fn display_txt(query: &str, txt_response: &ResolveResult<TxtLookup>) {
-    match txt_response {
-        Err(_) => {  },
-        Ok(txt_response) => {
-            println!("{}", &query);
-            for record in txt_response.iter() {
-                if !record.to_string().starts_with("v=spf1") {
-                    println!("{}", &record.to_string());
-                }
-            }
-        }
-    }
 }
